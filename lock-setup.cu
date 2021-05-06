@@ -4,8 +4,8 @@
 #include <string>
 #include <vector>
 
-const int minWorkgroups = 32;
-const int maxWorkgroups = 32;
+const int minWorkgroups = 2;
+const int maxWorkgroups = 2;
 const int numIterations = 10;
 const int expectedCount = 20480;
 
@@ -17,8 +17,33 @@ int* d_var;
 int* flag;
 int* d_flag;
 
+// petersons
+int* level;
+int* d_level;
+int* victim;
+int* d_victim;
+
 __global__
-void spinLock(volatile int* _flag, volatile int* _var, int numIterations) {
+void petersons(volatile int* _level, volatile int* _victim, int* _var, int numIterations) {
+	if (threadIdx.x == 0) {
+		for (int i = 0; i < numIterations; i++) {
+			for (int j = 0; j < gridDim.x - 1; j++) {
+				_level[blockIdx.x] = j;
+				_victim[j] = blockIdx.x;
+				for (int k = 0; k < gridDim.x; k++) {
+					while (k != blockIdx.x && _level[k] >= j && _victim[j] == blockIdx.x);
+				}
+			}
+			__threadfence();
+			*_var = *_var + 1;
+			__threadfence();
+			_level[blockIdx.x] = -1;
+		}
+	}
+}
+
+__global__
+void spinLock(volatile int* _flag, int* _var, int numIterations) {
 	if (threadIdx.x == 0) {
 		for (int i = 0; i < numIterations; i++) {
 			while(atomicCAS((int*) _flag, 0, 1) == 1);
@@ -36,6 +61,11 @@ void initializeBuffers(std::string testName) {
 	if (testName == "spin-lock") {
 		flag = (int*)malloc(1*sizeof(int));
 		cudaMalloc(&d_flag, 1*sizeof(int));
+	} else if (testName == "petersons") {
+		level = (int*)malloc(maxWorkgroups*sizeof(int));
+		cudaMalloc(&d_level, maxWorkgroups*sizeof(int));
+		victim = (int*)malloc(maxWorkgroups*sizeof(int));
+		cudaMalloc(&d_victim, maxWorkgroups*sizeof(int));
 	}
 }
 
@@ -43,6 +73,13 @@ void prepareBuffers(std::string testName) {
 	if (testName == "spin-lock") {
 		*flag = 0;
 		cudaMemcpy(d_flag, flag, 1*sizeof(int), cudaMemcpyHostToDevice);
+	} else if (testName == "petersons") {
+		for (int i = 0; i < maxWorkgroups; i++) {
+			level[i] = 0;
+			victim[i] = 0;
+		}
+		cudaMemcpy(d_level, level, maxWorkgroups*sizeof(int), cudaMemcpyHostToDevice);
+		cudaMemcpy(d_victim, victim, maxWorkgroups*sizeof(int), cudaMemcpyHostToDevice);
 	}
 }
 
@@ -52,6 +89,11 @@ void freeBuffers(std::string testName) {
 	if (testName == "spin-lock") {
 		cudaFree(d_flag);
 		free(flag);
+	} else if (testName == "petersons") {
+		cudaFree(d_level);
+		cudaFree(d_victim);
+		free(level);
+		free(victim);
 	}
 }
 
@@ -59,6 +101,8 @@ void runTest(std::string testName, int iterationsPerTest, int numWorkgroups) {
 	if (testName == "spin-lock") {
 		std::cout << "iterations per test: " << iterationsPerTest << "\n";
 		spinLock<<<numWorkgroups, 1>>>(d_flag, d_var, iterationsPerTest);
+	} else if (testName == "petersons") {
+		petersons<<<numWorkgroups, 1>>>(d_level, d_victim, d_var, iterationsPerTest);
 	}
 }
 
