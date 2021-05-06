@@ -23,6 +23,37 @@ int* d_level;
 int* victim;
 int* d_victim;
 
+// bakery
+int* entering;
+int* d_entering;
+int* ticket;
+int* d_ticket;
+
+__global__ 
+void bakery(volatile int* _entering, volatile int* _ticket, int* _var, int numIterations) {
+	if (threadIdx.x == 0) {
+		for (int i = 0; i < numIterations; i++) {
+			_entering[blockIdx.x] = 1;
+			int max = 0;
+			for (int j = 0; j < gridDim.x; j++) {
+				if (_ticket[j] > max) {
+					max = _ticket[j];
+				}
+			}
+			_ticket[blockIdx.x] = max + 1;
+			__threadfence();
+			for (int j = 0; j < gridDim.x; j++) {
+				while(j != gridDim.x && _entering[j] && (_ticket[j] < _ticket[blockIdx.x] || (_ticket[j] == _ticket[blockIdx.x] && j < blockIdx.x)));
+			}
+			__threadfence();
+			*_var = *_var + 1;
+			__threadfence();
+			_entering[blockIdx.x] = 0;
+		}
+	}
+}
+
+
 __global__
 void petersons(volatile int* _level, volatile int* _victim, int* _var, int numIterations) {
 	if (threadIdx.x == 0) {
@@ -66,6 +97,11 @@ void initializeBuffers(std::string testName) {
 		cudaMalloc(&d_level, maxWorkgroups*sizeof(int));
 		victim = (int*)malloc(maxWorkgroups*sizeof(int));
 		cudaMalloc(&d_victim, maxWorkgroups*sizeof(int));
+	} else if (testName == "bakery") {
+		entering = (int*)malloc(maxWorkgroups*sizeof(int));
+		cudaMalloc(&d_entering, maxWorkgroups*sizeof(int));
+		ticket = (int*)malloc(maxWorkgroups*sizeof(int));
+		cudaMalloc(&d_ticket, maxWorkgroups*sizeof(int));
 	}
 }
 
@@ -80,7 +116,15 @@ void prepareBuffers(std::string testName) {
 		}
 		cudaMemcpy(d_level, level, maxWorkgroups*sizeof(int), cudaMemcpyHostToDevice);
 		cudaMemcpy(d_victim, victim, maxWorkgroups*sizeof(int), cudaMemcpyHostToDevice);
+	} else if (testName == "bakery") {
+		for (int i = 0; i < maxWorkgroups; i++) {
+			entering[i] = 0;
+			ticket[i] = 0;
+		}
+		cudaMemcpy(d_entering, entering, maxWorkgroups*sizeof(int), cudaMemcpyHostToDevice);
+		cudaMemcpy(d_ticket, ticket, maxWorkgroups*sizeof(int), cudaMemcpyHostToDevice);
 	}
+
 }
 
 void freeBuffers(std::string testName) {
@@ -94,6 +138,11 @@ void freeBuffers(std::string testName) {
 		cudaFree(d_victim);
 		free(level);
 		free(victim);
+	} else if (testName == "bakery") {
+		cudaFree(d_entering);
+		cudaFree(d_ticket);
+		free(entering);
+		free(ticket);
 	}
 }
 
@@ -103,6 +152,8 @@ void runTest(std::string testName, int iterationsPerTest, int numWorkgroups) {
 		spinLock<<<numWorkgroups, 1>>>(d_flag, d_var, iterationsPerTest);
 	} else if (testName == "petersons") {
 		petersons<<<numWorkgroups, 1>>>(d_level, d_victim, d_var, iterationsPerTest);
+	} else if (testName == "bakery") {
+		bakery<<<numWorkgroups, 1>>>(d_entering, d_ticket, d_var, iterationsPerTest);
 	}
 }
 
