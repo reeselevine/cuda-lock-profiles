@@ -29,6 +29,43 @@ int* d_entering;
 int* ticket;
 int* d_ticket;
 
+// dekkers
+int* dekker_flag;
+int* d_dekker_flag;
+int* turn;
+int* d_turn;
+
+__device__
+bool other_thread_waiting(volatile int* _flag) {
+	for (int i = 0; i < gridDim.x; i++) {
+		if (i != blockIdx.x && _flag[i] == 1) {
+			return true;
+		}
+	}
+	return false;
+}
+
+__global__
+void dekkers(volatile int* _flag, volatile int* _turn, int* _var, int numIterations) {
+	if (threadIdx.x == 0) {
+		for (int i = 0; i < numIterations; i++) {
+			_flag[blockIdx.x] = 1;
+			while(other_thread_waiting(_flag)) {
+				_flag[blockIdx.x] = 0;
+				while(*_turn != -1 && *_turn != blockIdx.x);
+				*_turn = blockIdx.x;
+				_flag[blockIdx.x] = 1;
+			}
+			__threadfence();
+			*_var = *_var + 1;
+			__threadfence();
+			*_turn = -1;
+			_flag[blockIdx.x] = 0;
+		}
+	}
+}
+
+
 __global__ 
 void bakery(volatile int* _entering, volatile int* _ticket, int* _var, int numIterations) {
 	if (threadIdx.x == 0) {
@@ -102,7 +139,13 @@ void initializeBuffers(std::string testName) {
 		cudaMalloc(&d_entering, maxWorkgroups*sizeof(int));
 		ticket = (int*)malloc(maxWorkgroups*sizeof(int));
 		cudaMalloc(&d_ticket, maxWorkgroups*sizeof(int));
+	} else if (testName == "dekkers") {
+		dekker_flag = (int*)malloc(maxWorkgroups*sizeof(int));
+		cudaMalloc(&d_dekker_flag, maxWorkgroups*sizeof(int));
+		turn = (int*)malloc(1*sizeof(int));
+		cudaMalloc(&d_turn, 1*sizeof(int));
 	}
+
 }
 
 void prepareBuffers(std::string testName) {
@@ -123,8 +166,14 @@ void prepareBuffers(std::string testName) {
 		}
 		cudaMemcpy(d_entering, entering, maxWorkgroups*sizeof(int), cudaMemcpyHostToDevice);
 		cudaMemcpy(d_ticket, ticket, maxWorkgroups*sizeof(int), cudaMemcpyHostToDevice);
+	} else if (testName == "dekkers") {
+		for (int i = 0; i < maxWorkgroups; i++) {
+			dekker_flag[i] = 0;
+		}
+		*turn = -1;
+		cudaMemcpy(d_dekker_flag, dekker_flag, maxWorkgroups*sizeof(int), cudaMemcpyHostToDevice);
+		cudaMemcpy(d_turn, turn, 1*sizeof(int), cudaMemcpyHostToDevice);
 	}
-
 }
 
 void freeBuffers(std::string testName) {
@@ -143,6 +192,11 @@ void freeBuffers(std::string testName) {
 		cudaFree(d_ticket);
 		free(entering);
 		free(ticket);
+	} else if (testName == "dekkers") {
+		cudaFree(d_dekker_flag);
+		cudaFree(d_turn);
+		free(dekker_flag);
+		free(turn);
 	}
 }
 
@@ -154,6 +208,8 @@ void runTest(std::string testName, int iterationsPerTest, int numWorkgroups) {
 		petersons<<<numWorkgroups, 1>>>(d_level, d_victim, d_var, iterationsPerTest);
 	} else if (testName == "bakery") {
 		bakery<<<numWorkgroups, 1>>>(d_entering, d_ticket, d_var, iterationsPerTest);
+	} else if (testName == "dekkers") {
+		dekkers<<<numWorkgroups, 1>>>(d_dekker_flag, d_turn, d_var, iterationsPerTest);
 	}
 }
 
